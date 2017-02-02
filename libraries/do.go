@@ -47,6 +47,23 @@ type do_domain_record_t struct {
     Data    string  `json:"data,omitempty"`
 }
 
+type do_network_t struct {
+    IP      string  `json:"ip_address"`
+    Netmask string  `json:"netmask"`
+    Gateway string  `json:"gateway"`
+    Type    string  `json:"public"`
+}
+
+type do_droplet_t struct {
+    ID      int     `json:"id"`
+    Name    string  `json:"name"`
+    Memory  int     `json:"memory"`
+    
+    Networks struct {
+        V4 []do_network_t   `json:"v4"`
+    }   `json:"networks"`
+}
+
 type DO_c struct {
     Verbose, SuperVerbose     bool
     Config      DO_config_t
@@ -67,7 +84,7 @@ func (do DO_c) request (url string, jStr []byte) (body []byte, err error) {
     if err == nil {
         req.Header.Set("Content-Type", "application/json")
         req.Header.Set("Authorization", "Bearer " + do.Config.APIKey)
-
+        
         client := &http.Client{}
         resp, err := client.Do(req)
         if err == nil {
@@ -95,6 +112,40 @@ func (do DO_c) createDomainRecord (domain, domainType, subDomain, ip string) (er
     jStr, _ := json.Marshal(record)
     _, err = do.request(fmt.Sprintf("domains/%s/records", domain), jStr)
     return
+}
+
+/*! \brief Gets the node's info from it's name
+ */
+func (do DO_c) getDropletFromName (name string) (*do_droplet_t, error) {
+    name = strings.ToLower(name)
+    page := 1
+    perPage := 10
+    
+    for true {
+        resp, err := do.request(fmt.Sprintf("droplets?page=%d&per_page=%d", page, perPage), nil)
+        if err == nil {
+            var droplets struct {
+                Droplets []do_droplet_t    `json:"droplets"`
+            }
+            err = json.Unmarshal(resp, &droplets)
+            
+            for _, drop := range(droplets.Droplets) {
+                if strings.Compare(strings.ToLower(drop.Name), name) == 0 { //this is our node!
+                    return &drop, nil
+                }
+            }
+            
+            //didn't find it
+            if len(droplets.Droplets) < perPage {   //we don't have any more pages of nodes
+                return nil, err
+            }
+        } else {
+            return nil, err //this is bad
+        }
+        
+        page++; //ramp to the next one, we're not done
+    }
+    return  nil, nil    //won't get here
 }
 
 //-------------------------------------------------------------------------------------------------------------------------//
@@ -161,6 +212,40 @@ func (do DO_c) AssignDomainRecord (domain, domainType, subDomain, ip string) err
     }
     
     return err
+}
+
+/*! \brief Creates a new node, if it doesn't already exist
+ */
+func (do DO_c) CreateNode (name, region, size, image, sshKey string) (err error) {
+    //see if the droplet already exists
+    droplet, err := do.getDropletFromName (name)
+    
+    if err == nil {
+        if droplet == nil {  //we didn't get a droplet back
+            if do.Verbose { fmt.Println("Node does not exist, creating...") }
+            var node = struct {
+                Name    string  `json:"name"`
+                Region  string  `json:"region"`
+                Size    string  `json:"size"`
+                Image   string  `json:"image"`
+                Keys    []string    `json:"ssh_keys,omitempty"`
+            }{Name: name, Region: region, Size: size, Image: image}
+            
+            if len(sshKey) > 0 {    //see if we have any sshkeys for this
+                node.Keys = append(node.Keys, sshKey)
+            }
+            
+            jStr, _ := json.Marshal(node)
+            
+            _, err = do.request("droplets", jStr)
+            
+            if do.Verbose { fmt.Println("New node created successfully") }
+        } else {
+            if do.Verbose { fmt.Println("Node by that name already exists") }
+        }
+    }
+    
+    return
 }
 
 //curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer b7d03a6947b217efb6f3ec3bd3504582" 

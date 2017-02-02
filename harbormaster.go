@@ -60,6 +60,12 @@ func main() {
     fSubDomain  := flag.String("sd", "", "Subdomain name we're targeting. ie 'www'")
     fDomain     := flag.String("d", "", "Domain name we're targeting. ie 'google.com'")
 	fNodeID     := flag.Int("node", 0, "Node we're targeting")
+    fNodeName   := flag.String("n", "", "Name of the target node")
+    fRegion     := flag.String("region", "nyc3", "Slug of the region for the node")
+    fSize       := flag.String("size", "2gb", "Size of the node of interest")
+    fImage      := flag.String("image", "ubuntu-16-04-x64", "OS image to use for the node")
+    fSSHKey     := flag.String("sshKey", "", "SSH Key to use when creating a node")
+    fCreate     := flag.Bool("c", false, "If we want to create a new node")
     fVerbose    := flag.Bool("V", false, "Verbose output")
     fSuperV     := flag.Bool("V+", false, "Super verbose output")
     fVersion    := flag.Bool("v", false, "Version")
@@ -84,7 +90,8 @@ func main() {
     
     
 //----- Initialization --------------------------------------------------------------------------------------------------------------//
-    config, err := readConfig("/var/www/work/bin/harbormaster.json")
+    cwd, _ := os.Getwd()
+    config, err := readConfig(cwd + "/harbormaster.json")
     
     if err != nil { //this is bad
         fmt.Println(err)
@@ -94,7 +101,14 @@ func main() {
     do := libraries.DO_c {SuperVerbose: *fSuperV, Verbose: *fVerbose, Config: config.DO}   //digital ocean library
 
 //----- Figure out what we're done --------------------------------------------------------------------------------------------------------------//
-    if len(*fIP) > 0 && *fNodeID > 0 {
+    if *fCreate {   //we're creating a new node
+        if len(*fNodeName) > 0 {
+            fmt.Println("Creating node")
+            err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey)
+        } else {
+            err = fmt.Errorf("Node name not set.  use the -n option")
+        }
+    } else if len(*fIP) > 0 && *fNodeID > 0 {
         fmt.Println("Setting floating ip to a node")
         
         existing := 0
