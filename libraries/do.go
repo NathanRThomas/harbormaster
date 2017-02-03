@@ -64,6 +64,10 @@ type do_droplet_t struct {
     }   `json:"networks"`
 }
 
+type FileOutput_t struct {
+    Droplet     do_droplet_t    `json:"droplet"`
+}
+
 type DO_c struct {
     Verbose, SuperVerbose     bool
     Config      DO_config_t
@@ -216,7 +220,7 @@ func (do DO_c) AssignDomainRecord (domain, domainType, subDomain, ip string) err
 
 /*! \brief Creates a new node, if it doesn't already exist
  */
-func (do DO_c) CreateNode (name, region, size, image, sshKey string) (err error) {
+func (do DO_c) CreateNode (name, region, size, image, sshKey string, fileOutput *FileOutput_t) (err error) {
     //see if the droplet already exists
     droplet, err := do.getDropletFromName (name)
     
@@ -236,12 +240,19 @@ func (do DO_c) CreateNode (name, region, size, image, sshKey string) (err error)
             }
             
             jStr, _ := json.Marshal(node)
-            
             _, err = do.request("droplets", jStr)
+            
+            if err == nil {
+                droplet, err = do.getDropletFromName (name) //get the droplet again, we need the ip address
+            }
             
             if do.Verbose { fmt.Println("New node created successfully") }
         } else {
             if do.Verbose { fmt.Println("Node by that name already exists") }
+        }
+        
+        if err == nil && droplet != nil { //this worked
+            fileOutput.Droplet = *droplet
         }
     }
     

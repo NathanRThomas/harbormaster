@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"flag"
     "os"
+    "io/ioutil"
     "encoding/json"
     
     "github.com/NathanRThomas/harbormaster/libraries"
@@ -46,6 +47,14 @@ func readConfig (loc string) (config config_t, err error) {
     return
 }
 
+/*! \brief Writes the json out for the file
+ */
+func writeOutput (loc string, fileOutput libraries.FileOutput_t) (error) {
+    data, _ := json.Marshal(fileOutput)
+    err := ioutil.WriteFile(loc, data, 0644)
+    return err
+}
+
 //-------------------------------------------------------------------------------------------------------------------------//
 //----- MAIN --------------------------------------------------------------------------------------------------------------//
 //-------------------------------------------------------------------------------------------------------------------------//
@@ -55,6 +64,7 @@ var minversion string	//this gets passed in from the command line build process,
 func main() {
 	
 //----- Handle our Flags --------------------------------------------------------------------------------------------------------------//
+    fWriteFile  := flag.Bool("o", false, "Writes output to a local json file")
     fIP         := flag.String("ip", "", "IP address we're targeting")
     fDomainType := flag.String("t", "A", "Type of domain we're targeting. ie 'A' or 'AAAA' etc")
     fSubDomain  := flag.String("sd", "", "Subdomain name we're targeting. ie 'www'")
@@ -99,12 +109,13 @@ func main() {
     }
     
     do := libraries.DO_c {SuperVerbose: *fSuperV, Verbose: *fVerbose, Config: config.DO}   //digital ocean library
-
+    fileOutput := libraries.FileOutput_t{}
+    
 //----- Figure out what we're done --------------------------------------------------------------------------------------------------------------//
     if *fCreate {   //we're creating a new node
         if len(*fNodeName) > 0 {
-            fmt.Println("Creating node")
-            err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey)
+            fmt.Println("Creating node: " + *fNodeName)
+            err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey, &fileOutput)
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
         }
@@ -132,6 +143,10 @@ func main() {
 //----- See if we were successful --------------------------------------------------------------------------------------------------------------//
     if err == nil {
         fmt.Println("Success")
+        
+        if *fWriteFile {    //we want to output the results to a file
+            writeOutput(cwd + "/harbormaster_output.json", fileOutput)
+        }
     } else {
         fmt.Println(err)
         os.Exit(2)
