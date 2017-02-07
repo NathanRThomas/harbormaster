@@ -11,6 +11,7 @@ import (
     "bytes"
     "encoding/json"
     "strings"
+    "time"
     )
 
 //-------------------------------------------------------------------------------------------------------------------------//
@@ -99,7 +100,7 @@ func (do DO_c) request (url string, jStr []byte) (body []byte, err error) {
             if do.SuperVerbose {
                 fmt.Println("response Status:", resp.Status)
                 fmt.Println("response Headers:", resp.Header)
-                fmt.Println("response Body:", string(body[:100]))
+                fmt.Println("response Body:", string(body[:]))
             }
         } else {
             return nil, err
@@ -184,38 +185,55 @@ func (do DO_c) GetFloatingIP (ip string) (int, error) {
 func (do DO_c) AssignDomainRecord (domain, domainType, subDomain, ip string) error {
     domain = strings.ToLower(domain)
     subDomain = strings.ToLower(subDomain)
-    
+    pages := 1
     //first step is to get a list of current subdomains from this parent domain
     if do.Verbose { fmt.Println("Getting list of current subdomains") }
-    resp, err := do.request(fmt.Sprintf("domains/%s/records", domain), nil)
-    if err == nil {
-        var records struct {
-            Records []do_domain_record_t    `json:"domain_records"`
-        }
-        err = json.Unmarshal(resp, &records)
-        
+    for pages > 0 {
+        nextUrl := fmt.Sprintf("domains/%s/records?page=%d", domain, pages)    //this is the next url to request
+        resp, err := do.request(nextUrl, nil)
         if err == nil {
-            //loop through these records looking for a matched subdomain
-            for _, sd := range (records.Records) {
-                if strings.Compare(strings.ToLower(sd.Name), subDomain) == 0 {  //the record exists
-                    if strings.Compare(domainType, sd.Type) == 0 {
-                        if do.Verbose { fmt.Println("SubDomain already exists and is correct") }
-                        return nil  //we're done
-                    } else {
-                        if do.Verbose { fmt.Println("SubDomain already exists but needs to be updated") }
-                        //return do.updateDomainRecord()
-                        return fmt.Errorf("Fuction not in place yet")
+            var records struct {
+                Records []do_domain_record_t    `json:"domain_records"`
+                Links   struct {
+                    Pages   struct {
+                        Next    string  `json:"next"`
+                    }   `json:"pages"`
+                }   `json:"links"`
+            }
+            err = json.Unmarshal(resp, &records)
+            if err == nil {
+                //loop through these records looking for a matched subdomain
+                for _, sd := range (records.Records) {
+                    if strings.Compare(strings.ToLower(sd.Name), subDomain) == 0 {  //the record exists
+                        if strings.Compare(domainType, sd.Type) == 0 {
+                            if do.Verbose { fmt.Println("SubDomain already exists and is correct") }
+                            return nil  //we're done
+                        } else {
+                            if do.Verbose { fmt.Println("SubDomain already exists but needs to be updated") }
+                            //return do.updateDomainRecord()
+                            return fmt.Errorf("Fuction not in place yet")
+                        }
                     }
                 }
+                
+                //before we create another domain, keep searching as long as we have a "next" url
+                if len(records.Links.Pages.Next) > 0 {
+                    pages++
+                } else {
+                    pages = 0   //we're done
+                }
+            } else {
+                return err
             }
-            
-            //if we're here it's cause it didn't exist yet
-            if do.Verbose { fmt.Println("SubDomain does not exist, creating...") }
-            return do.createDomainRecord(domain, domainType, subDomain, ip)
+        } else {
+            return err
         }
     }
     
-    return err
+    //if we're here it's cause it didn't exist yet
+    if do.Verbose { fmt.Println("SubDomain does not exist, creating...") }
+    return do.createDomainRecord(domain, domainType, subDomain, ip)
+    return nil
 }
 
 /*! \brief Creates a new node, if it doesn't already exist
@@ -243,6 +261,8 @@ func (do DO_c) CreateNode (name, region, size, image, sshKey string, fileOutput 
             _, err = do.request("droplets", jStr)
             
             if err == nil {
+                //we need to give digital ocean a few seconds to assign an ip address
+                time.Sleep(5 * time.Second)
                 droplet, err = do.getDropletFromName (name) //get the droplet again, we need the ip address
             }
             
