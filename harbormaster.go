@@ -64,7 +64,10 @@ var minversion string	//this gets passed in from the command line build process,
 func main() {
 	
 //----- Handle our Flags --------------------------------------------------------------------------------------------------------------//
-    fWriteFile  := flag.Bool("o", false, "Writes output to a local json file")
+    fCreate     := flag.Bool("c", false, "If we want to create a new node")
+    fDelete     := flag.Bool("Dn", false, "If we want to delete a node")
+    fDeleteSub  := flag.Bool("Ds", false, "If we want to delete a sub domain")
+    
     fIP         := flag.String("ip", "", "IP address we're targeting")
     fDomainType := flag.String("t", "A", "Type of domain we're targeting. ie 'A' or 'AAAA' etc")
     fSubDomain  := flag.String("sd", "", "Subdomain name we're targeting. ie 'www'")
@@ -75,7 +78,8 @@ func main() {
     fSize       := flag.String("size", "2gb", "Size of the node of interest")
     fImage      := flag.String("image", "ubuntu-16-04-x64", "OS image to use for the node")
     fSSHKey     := flag.String("sshKey", "", "SSH Key to use when creating a node")
-    fCreate     := flag.Bool("c", false, "If we want to create a new node")
+    
+    fWriteFile  := flag.Bool("o", false, "Writes output to a local json file")
     fVerbose    := flag.Bool("V", false, "Verbose output")
     fSuperV     := flag.Bool("V+", false, "Super verbose output")
     fVersion    := flag.Bool("v", false, "Version")
@@ -118,6 +122,22 @@ func main() {
             err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey, &fileOutput)
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
+        }
+    } else if *fDelete {    //we want to delete a node
+        if len(*fNodeName) > 0 {
+            err = do.DeleteNode(*fNodeName)
+        } else {
+            err = fmt.Errorf("Node name not set.  use the -n option")
+        }
+    } else if *fDeleteSub { //we want to delete a sub domain
+        if len(*fSubDomain) > 0 {
+            if len(*fDomain) > 0 {
+                err = do.DeleteDomainRecord(*fDomain, *fSubDomain)
+            } else {
+                err = fmt.Errorf("Domain name not set. use the -d option")
+            }
+        } else {
+            err = fmt.Errorf("Subdomain not set.  use the -sd option")
         }
     } else if len(*fIP) > 0 && *fNodeID > 0 {
         fmt.Println("Setting floating ip to a node")

@@ -110,6 +110,35 @@ func (do DO_c) request (url string, jStr []byte) (body []byte, err error) {
     return
 }
 
+/*! \brief For when we do a delete request where we aren't expecting a body, only a return code
+ */
+func (do DO_c) deleteRequest (url string) (err error) {
+    req, err := http.NewRequest("DELETE", do_base_url + url, nil)
+    
+    if err == nil {
+        req.Header.Set("Content-Type", "application/json")
+        req.Header.Set("Authorization", "Bearer " + do.Config.APIKey)
+        
+        client := &http.Client{}
+        resp, err := client.Do(req)
+        if err == nil {
+            defer resp.Body.Close()
+            if do.SuperVerbose {
+                fmt.Println("response Status:", resp.Status)
+                fmt.Println("response Headers:", resp.Header)
+            }
+            
+            if resp.StatusCode != 204 {
+                return fmt.Errorf("Delete request failed: status code: %d - url: %s", resp.StatusCode, url)
+            }
+        } else {
+            return err
+        }
+    }
+    
+    return
+}
+
 /*! \brief Creates a domain record when one doesn't exist yet
  */
 func (do DO_c) createDomainRecord (domain, domainType, subDomain, ip string) (err error) {
@@ -153,6 +182,51 @@ func (do DO_c) getDropletFromName (name string) (*do_droplet_t, error) {
     return  nil, nil    //won't get here
 }
 
+/*! \brief Gets a specific domain record from the domain and sub-domain
+ */
+func (do DO_c) getDomainRecord (domain, subDomain string) (dr *do_domain_record_t, err error) {
+    pages := 1
+    //first step is to get a list of current subdomains from this parent domain
+    if do.Verbose { fmt.Println("Getting list of current subdomains") }
+    for pages > 0 {
+        nextUrl := fmt.Sprintf("domains/%s/records?page=%d", domain, pages)    //this is the next url to request
+        resp, err := do.request(nextUrl, nil)
+        if err == nil {
+            var records struct {
+                Records []do_domain_record_t    `json:"domain_records"`
+                Links   struct {
+                    Pages   struct {
+                        Next    string  `json:"next"`
+                    }   `json:"pages"`
+                }   `json:"links"`
+            }
+            err = json.Unmarshal(resp, &records)
+            if err == nil {
+                //loop through these records looking for a matched subdomain
+                for _, sd := range (records.Records) {
+                    if strings.Compare(strings.ToLower(sd.Name), subDomain) == 0 {  //the record exists
+                        return &sd, nil  //we found it
+                    }
+                }
+                
+                //keep searching as long as we have a "next" url
+                if len(records.Links.Pages.Next) > 0 {
+                    pages++
+                } else {
+                    pages = 0   //we're done
+                }
+            } else {
+                return nil, err
+            }
+        } else {
+            return nil, err
+        }
+    }
+    
+    //if we're here it's cause it didn't exist yet
+    return nil, nil
+}
+
 //-------------------------------------------------------------------------------------------------------------------------//
 //----- PUBLIC FUNCTIONS --------------------------------------------------------------------------------------------------//
 //-------------------------------------------------------------------------------------------------------------------------//
@@ -185,55 +259,44 @@ func (do DO_c) GetFloatingIP (ip string) (int, error) {
 func (do DO_c) AssignDomainRecord (domain, domainType, subDomain, ip string) error {
     domain = strings.ToLower(domain)
     subDomain = strings.ToLower(subDomain)
-    pages := 1
-    //first step is to get a list of current subdomains from this parent domain
-    if do.Verbose { fmt.Println("Getting list of current subdomains") }
-    for pages > 0 {
-        nextUrl := fmt.Sprintf("domains/%s/records?page=%d", domain, pages)    //this is the next url to request
-        resp, err := do.request(nextUrl, nil)
-        if err == nil {
-            var records struct {
-                Records []do_domain_record_t    `json:"domain_records"`
-                Links   struct {
-                    Pages   struct {
-                        Next    string  `json:"next"`
-                    }   `json:"pages"`
-                }   `json:"links"`
-            }
-            err = json.Unmarshal(resp, &records)
-            if err == nil {
-                //loop through these records looking for a matched subdomain
-                for _, sd := range (records.Records) {
-                    if strings.Compare(strings.ToLower(sd.Name), subDomain) == 0 {  //the record exists
-                        if strings.Compare(domainType, sd.Type) == 0 {
-                            if do.Verbose { fmt.Println("SubDomain already exists and is correct") }
-                            return nil  //we're done
-                        } else {
-                            if do.Verbose { fmt.Println("SubDomain already exists but needs to be updated") }
-                            //return do.updateDomainRecord()
-                            return fmt.Errorf("Fuction not in place yet")
-                        }
-                    }
-                }
-                
-                //before we create another domain, keep searching as long as we have a "next" url
-                if len(records.Links.Pages.Next) > 0 {
-                    pages++
-                } else {
-                    pages = 0   //we're done
-                }
+    dr, err := do.getDomainRecord(domain, subDomain)    //see if this already exists
+    
+    if err == nil {
+        if dr == nil {  //it doesn't exist yet, so create it
+            if do.Verbose { fmt.Println("SubDomain does not exist, creating...") }
+            return do.createDomainRecord(domain, domainType, subDomain, ip)
+        } else {    //it exists already
+            if strings.Compare(domainType, dr.Type) == 0 {
+                if do.Verbose { fmt.Println("SubDomain already exists and is correct") }
+                return nil  //we're done
             } else {
-                return err
+                if do.Verbose { fmt.Println("SubDomain already exists but needs to be updated") }
+                //return do.updateDomainRecord()
+                return fmt.Errorf("Fuction not in place yet")
             }
-        } else {
-            return err
         }
     }
     
-    //if we're here it's cause it didn't exist yet
-    if do.Verbose { fmt.Println("SubDomain does not exist, creating...") }
-    return do.createDomainRecord(domain, domainType, subDomain, ip)
-    return nil
+    return err
+}
+
+/*! \brief Deletes an existing domain record
+ */
+func (do DO_c) DeleteDomainRecord (domain, subDomain string) error {
+    domain = strings.ToLower(domain)
+    subDomain = strings.ToLower(subDomain)
+    dr, err := do.getDomainRecord(domain, subDomain)    //see if this already exists
+    
+    if err == nil {
+        if dr == nil {  //it doesn't exist, so we're good
+            if do.Verbose { fmt.Println("SubDomain does not exist, nothing to do...") }
+        } else {    //it exists
+            fmt.Println("Deleting SubDomain " + subDomain)
+            err = do.deleteRequest(fmt.Sprintf("domains/%s/records/%d", domain, dr.ID))     //delete it
+        }
+    }
+    
+    return err
 }
 
 /*! \brief Creates a new node, if it doesn't already exist
@@ -279,5 +342,19 @@ func (do DO_c) CreateNode (name, region, size, image, sshKey string, fileOutput 
     return
 }
 
-//curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer b7d03a6947b217efb6f3ec3bd3504582" 
-//-d '{"type":"assign","droplet_id":8219222}' "https://api.digitalocean.com/v2/floating_ips/45.55.96.47/actions" 
+/*! \brief This will delete a node
+ */
+func (do DO_c) DeleteNode (name string) (err error) {
+    droplet, err := do.getDropletFromName (name)
+    
+    if err == nil {
+        if droplet != nil {    //we have a droplet we want to remove
+            fmt.Println("Deleting node: " + name)
+            err = do.deleteRequest(fmt.Sprintf("droplets/%d", droplet.ID))     //delete it
+        } else {
+            if do.Verbose { fmt.Println("Droplet does not exist, nothing to do...") }
+        }
+    }
+    
+    return
+}
