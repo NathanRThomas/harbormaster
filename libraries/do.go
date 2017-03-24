@@ -31,6 +31,7 @@ type DO_config_t struct {
 type do_t struct {
     Type    string `json:"type,omitempty"`
     ID      int    `json:"droplet_id,omitempty"`
+    Size    string  `json:"size,omitempty"`
 }
 
 type do_floating_t struct {
@@ -59,6 +60,8 @@ type do_droplet_t struct {
     ID      int     `json:"id"`
     Name    string  `json:"name"`
     Memory  int     `json:"memory"`
+    Status  string  `json:"status"`
+    Locked  bool    `json:"locked"`
     
     Networks struct {
         V4 []do_network_t   `json:"v4"`
@@ -148,6 +151,49 @@ func (do DO_c) createDomainRecord (domain, domainType, subDomain, ip string) (er
     return
 }
 
+
+/*! \brief Handles shutting down and powering off a node
+ */
+func (do DO_c) shutdownNode (droplet *do_droplet_t) (err error) {
+    simple := do_t{Type: "shutdown"}
+    jStr, _ := json.Marshal(simple)
+    if do.Verbose { fmt.Println("Shutting down node") }
+    _, err = do.request(fmt.Sprintf("droplets/%d/actions", droplet.ID), jStr)   //issue the shutdown command
+    
+    if err == nil {
+        off := do.waitForNodeStatus(droplet.ID, "off", 10) //wait for this to be off, or we can bail
+        if !off {   //this didn't work, hit it with the hammah
+            simple.Type = "power_off"
+            jStr, _ = json.Marshal(simple)
+            if do.Verbose { fmt.Println("Powering OFF node") }
+            _, err = do.request(fmt.Sprintf("droplets/%d/actions", droplet.ID), jStr)   //issue the poweroff command
+            time.Sleep(time.Second * 5)
+        }
+    }
+    return
+}
+
+/*! \brief Start up the node
+ */
+func (do DO_c) startNode (droplet *do_droplet_t) (err error) {
+    simple := do_t{Type: "power_on"}
+    jStr, _ := json.Marshal(simple)
+    if do.Verbose { fmt.Println("Powering ON node") }
+    _, err = do.request(fmt.Sprintf("droplets/%d/actions", droplet.ID), jStr)   //issue the shutdown command
+    return
+}
+
+/*! \brief Gets the info about a droplet from its id
+ */
+func (do DO_c) getDropletFromID (id int) (*do_droplet_t) {
+    resp, _ := do.request(fmt.Sprintf("droplets/%d", id), nil)   //get the status
+    var m struct {
+        Droplet do_droplet_t    `json:"droplet"`
+    }
+    json.Unmarshal(resp, &m)
+    return &m.Droplet
+}
+
 /*! \brief Gets the node's info from it's name
  */
 func (do DO_c) getDropletFromName (name string) (*do_droplet_t, error) {
@@ -227,8 +273,21 @@ func (do DO_c) getDomainRecord (domain, subDomain string) (dr *do_domain_record_
     return nil, nil
 }
 
-//-------------------------------------------------------------------------------------------------------------------------//
-//----- PUBLIC FUNCTIONS --------------------------------------------------------------------------------------------------//
+/*! \brief Simple function that waits for a node to be the status we're looking for
+ */
+func (do DO_c) waitForNodeStatus (id int, status string, maxTries int) bool {
+    time.Sleep(time.Second * 3)
+    dStatus := do.getDropletFromID(id)
+    
+    if dStatus.Status == status { return true } //we're good
+    maxTries--
+    
+    if maxTries < 0 { return false }    //this is bad
+    return do.waitForNodeStatus(id, status, maxTries)   //recurive call as we wait again
+}
+
+  //-------------------------------------------------------------------------------------------------------------------------//
+ //----- DOMAIN FUNCTIONS --------------------------------------------------------------------------------------------------//
 //-------------------------------------------------------------------------------------------------------------------------//
 
 /*! \brief This will assign a floating ip address to a specific node
@@ -299,9 +358,14 @@ func (do DO_c) DeleteDomainRecord (domain, subDomain string) error {
     return err
 }
 
+  //-------------------------------------------------------------------------------------------------------------------------//
+ //----- NODE FUNCTIONS ----------------------------------------------------------------------------------------------------//
+//-------------------------------------------------------------------------------------------------------------------------//
+
+
 /*! \brief Creates a new node, if it doesn't already exist
  */
-func (do DO_c) CreateNode (name, region, size, image, sshKey string, fileOutput *FileOutput_t) (err error) {
+func (do DO_c) CreateNode (name, region string, size int, image, sshKey string, fileOutput *FileOutput_t) (err error) {
     //see if the droplet already exists
     droplet, err := do.getDropletFromName (name)
     
@@ -314,7 +378,7 @@ func (do DO_c) CreateNode (name, region, size, image, sshKey string, fileOutput 
                 Size    string  `json:"size"`
                 Image   string  `json:"image"`
                 Keys    []string    `json:"ssh_keys,omitempty"`
-            }{Name: name, Region: region, Size: size, Image: image}
+            }{Name: name, Region: region, Size: fmt.Sprintf("%dgb", size), Image: image}
             
             if len(sshKey) > 0 {    //see if we have any sshkeys for this
                 node.Keys = append(node.Keys, sshKey)
@@ -353,6 +417,53 @@ func (do DO_c) DeleteNode (name string) (err error) {
             err = do.deleteRequest(fmt.Sprintf("droplets/%d", droplet.ID))     //delete it
         } else {
             if do.Verbose { fmt.Println("Droplet does not exist, nothing to do...") }
+        }
+    }
+    
+    return
+}
+
+/*! \brief Resizes the node to the new target size
+ *  This needs to power the node off first, then resize it, then start it
+ */
+func (do DO_c) ResizeNode (name string, size int) (err error) {
+    droplet, err := do.getDropletFromName (name)    //get this droplet
+    
+    if err == nil {
+        if droplet != nil {    //we have a droplet we want to remove
+            if int(droplet.Memory / 1024) != size {
+                fmt.Println("Resizing node: " + name)
+                err = do.shutdownNode(droplet)  //first step is to shut it down
+                if err == nil {
+                    //now we issue the resize
+                    simple := do_t{Type: "resize", Size: fmt.Sprintf("%dgb", size)}
+                    jStr, _ := json.Marshal(simple)
+                    if do.Verbose { fmt.Println("Resizing node '%s' to %dgb", name, size) }
+                    _, err = do.request(fmt.Sprintf("droplets/%d/actions", droplet.ID), jStr)   //issue the resize command
+                    
+                    //this can take a while, so we wait a minute, but we want the node to start as soon as possible
+                    if err == nil {
+                        locked := true
+                        fmt.Println("Waiting for node to finish resize")
+                        for locked {
+                            time.Sleep(time.Second * 20)    //wait a little while, this takes some time
+                            dStatus := do.getDropletFromID(droplet.ID)
+                            
+                            if !dStatus.Locked {    //we've been waiting for this moment
+                                do.startNode(droplet)   //start this node
+                                locked = false
+                            }
+                        }
+                        
+                        //now we just wait for the node to be active
+                        do.waitForNodeStatus(droplet.ID, "active", 10)
+                    }
+                }
+            } else {
+                if do.Verbose { fmt.Println("Droplet already the target size.  Skipping") }
+            }
+        } else {
+            if do.Verbose { fmt.Println("Droplet does not exist, please check the name") }
         }
     }
     

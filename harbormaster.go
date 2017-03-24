@@ -15,7 +15,7 @@ import (
     "github.com/NathanRThomas/harbormaster/libraries"
 )
 
-const VER		= "0.1"
+const VER		= "0.2"
 
 type config_t struct {
     DO      libraries.DO_config_t  `json:"digital_ocean"`
@@ -66,6 +66,7 @@ func main() {
 //----- Handle our Flags --------------------------------------------------------------------------------------------------------------//
     fCreate     := flag.Bool("c", false, "If we want to create a new node")
     fDelete     := flag.Bool("Dn", false, "If we want to delete a node")
+    fResize     := flag.Bool("z", false, "If we want to re-size an existing node")
     fDeleteSub  := flag.Bool("Ds", false, "If we want to delete a sub domain")
     
     fIP         := flag.String("ip", "", "IP address we're targeting")
@@ -75,7 +76,7 @@ func main() {
 	fNodeID     := flag.Int("node", 0, "Node we're targeting")
     fNodeName   := flag.String("n", "", "Name of the target node")
     fRegion     := flag.String("region", "nyc3", "Slug of the region for the node")
-    fSize       := flag.String("size", "2gb", "Size of the node of interest")
+    fSize       := flag.Int("size", 0, "Size of the node in gb")
     fImage      := flag.String("image", "ubuntu-16-04-x64", "OS image to use for the node")
     fSSHKey     := flag.String("sshKey", "", "SSH Key to use when creating a node")
     
@@ -87,8 +88,6 @@ func main() {
 	
 	flag.Parse()
 	
-    fmt.Println("DOing it in GO")
-    
     if *fVersion {  //we're just looking for the version of the tool
         fmt.Printf("\nHarborMaster: %s.%s\n\n", VER, minversion)
         os.Exit(0)
@@ -118,14 +117,28 @@ func main() {
 //----- Figure out what we're done --------------------------------------------------------------------------------------------------------------//
     if *fCreate {   //we're creating a new node
         if len(*fNodeName) > 0 {
-            fmt.Println("Creating node: " + *fNodeName)
-            err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey, &fileOutput)
+            if *fSize > 0 {
+                fmt.Println("Creating node: " + *fNodeName)
+                err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey, &fileOutput)
+            } else {
+                err = fmt.Errorf("Size of node not set.  use the -size option")
+            }
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
         }
     } else if *fDelete {    //we want to delete a node
         if len(*fNodeName) > 0 {
             err = do.DeleteNode(*fNodeName)
+        } else {
+            err = fmt.Errorf("Node name not set.  use the -n option")
+        }
+    } else if *fResize {    //we want to resize a node
+        if len(*fNodeName) > 0 {
+            if *fSize > 0 {
+                err = do.ResizeNode(*fNodeName, *fSize)
+            } else {
+                err = fmt.Errorf("Size to resize to not set.  use the -size option")
+            }
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
         }
