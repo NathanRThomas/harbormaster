@@ -365,7 +365,7 @@ func (do DO_c) DeleteDomainRecord (domain, subDomain string) error {
 
 /*! \brief Creates a new node, if it doesn't already exist
  */
-func (do DO_c) CreateNode (name, region string, size int, image, sshKey string, fileOutput *FileOutput_t) (err error) {
+func (do DO_c) CreateNode (name, region, tag string, size int, image, sshKey string, fileOutput *FileOutput_t) (err error) {
     //see if the droplet already exists
     droplet, err := do.getDropletFromName (name)
     
@@ -378,11 +378,14 @@ func (do DO_c) CreateNode (name, region string, size int, image, sshKey string, 
                 Size    string  `json:"size"`
                 Image   string  `json:"image"`
                 Keys    []string    `json:"ssh_keys,omitempty"`
+                Tags    []string    `json:"tags,omitempty"`
             }{Name: name, Region: region, Size: fmt.Sprintf("%dgb", size), Image: image}
             
-            if len(sshKey) > 0 {    //see if we have any sshkeys for this
-                node.Keys = append(node.Keys, sshKey)
-            }
+            //see if we have any sshkeys for this
+            if len(sshKey) > 0 { node.Keys = append(node.Keys, sshKey) }
+            
+            //see if we have any tag for this node
+            if len(tag) > 0 { node.Tags = append(node.Tags, tag) }
             
             jStr, _ := json.Marshal(node)
             _, err = do.request("droplets", jStr)
@@ -469,3 +472,4 @@ func (do DO_c) ResizeNode (name string, size int) (err error) {
     
     return
 }
+

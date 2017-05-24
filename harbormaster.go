@@ -15,10 +15,11 @@ import (
     "github.com/NathanRThomas/harbormaster/libraries"
 )
 
-const VER		= "0.2"
+const VER		= "0.3"
 
 type config_t struct {
     DO      libraries.DO_config_t  `json:"digital_ocean"`
+    CF      libraries.CF_config_t   `json:"cloud_flare"`
 }
 
 //-------------------------------------------------------------------------------------------------------------------------//
@@ -37,8 +38,14 @@ func readConfig (loc string) (config config_t, err error) {
 		err = jsonParser.Decode(&config)
         
         if err == nil {
-            if len(config.DO.APIKey) < 64 {
+            if len(config.DO.APIKey) < 1 && len(config.CF.APIKey) < 1 {
+                err = fmt.Errorf("No valid api keys found")
+            } else if len(config.DO.APIKey) > 0 && len(config.DO.APIKey) < 64 {
                 err = fmt.Errorf("Digital Ocean api key appears invalid")
+            } else if len(config.CF.APIKey) > 0 && len(config.CF.Email) < 1 {
+                err = fmt.Errorf("Cloud Flare requires an email associated with the api key")
+            } else if len(config.CF.APIKey) > 0 && len(config.CF.Zone) < 1 {
+                err = fmt.Errorf("Cloud Flare requires a zone id associated with it")
             }
         }
 	} else {
@@ -64,11 +71,20 @@ var minversion string	//this gets passed in from the command line build process,
 func main() {
 	
 //----- Handle our Flags --------------------------------------------------------------------------------------------------------------//
-    fCreate     := flag.Bool("c", false, "If we want to create a new node")
-    fDelete     := flag.Bool("Dn", false, "If we want to delete a node")
-    fResize     := flag.Bool("z", false, "If we want to re-size an existing node")
-    fDeleteSub  := flag.Bool("Ds", false, "If we want to delete a sub domain")
     
+    //Third Parties
+    //fTP_DO          := flag.Bool("digitalocean", true, "Use Digital Ocean for this request")  //we do this anyway
+    fTP_CloudFlare  := flag.Bool("cloudflare", false, "Use Cloud Flare for this request")
+    
+    //Actions
+    fCreate     := flag.Bool("c", false, "Create a new node")
+    fDelete     := flag.Bool("Dn", false, "Delete a node")
+    fResize     := flag.Bool("z", false, "Re-size an existing node")
+    fDeleteSub  := flag.Bool("Ds", false, "Delete a sub domain")
+    fCreateSub  := flag.Bool("cs", false, "Create a sub domain")
+    fFloatingIP := flag.Bool("fip", false, "Sets a floating ip to a node")
+    
+    fTag        := flag.String("tag", "", "Tag to associate with either a node or a balancer")
     fIP         := flag.String("ip", "", "IP address we're targeting")
     fDomainType := flag.String("t", "A", "Type of domain we're targeting. ie 'A' or 'AAAA' etc")
     fSubDomain  := flag.String("sd", "", "Subdomain name we're targeting. ie 'www'")
@@ -80,6 +96,7 @@ func main() {
     fImage      := flag.String("image", "ubuntu-16-04-x64", "OS image to use for the node")
     fSSHKey     := flag.String("sshKey", "", "SSH Key to use when creating a node")
     
+    //Other
     fWriteFile  := flag.Bool("o", false, "Writes output to a local json file")
     fVerbose    := flag.Bool("V", false, "Verbose output")
     fSuperV     := flag.Bool("V+", false, "Super verbose output")
@@ -111,7 +128,13 @@ func main() {
         os.Exit(1)
     }
     
+    if *fTP_CloudFlare && len(config.CF.APIKey) < 1 {
+        fmt.Println("Cannot user ClourFlare without the api_key set in the harbormaster.json config file")
+        os.Exit(3)
+    }
+    
     do := libraries.DO_c {SuperVerbose: *fSuperV, Verbose: *fVerbose, Config: config.DO}   //digital ocean library
+    cf := libraries.CF_c {SuperVerbose: *fSuperV, Verbose: *fVerbose, Config: config.CF}   //clourd flare library
     fileOutput := libraries.FileOutput_t{}
     
 //----- Figure out what we're done --------------------------------------------------------------------------------------------------------------//
@@ -119,19 +142,21 @@ func main() {
         if len(*fNodeName) > 0 {
             if *fSize > 0 {
                 fmt.Println("Creating node: " + *fNodeName)
-                err = do.CreateNode(*fNodeName, *fRegion, *fSize, *fImage, *fSSHKey, &fileOutput)
+                err = do.CreateNode(*fNodeName, *fRegion, *fTag, *fSize, *fImage, *fSSHKey, &fileOutput)
             } else {
                 err = fmt.Errorf("Size of node not set.  use the -size option")
             }
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
         }
+    
     } else if *fDelete {    //we want to delete a node
         if len(*fNodeName) > 0 {
             err = do.DeleteNode(*fNodeName)
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
         }
+    
     } else if *fResize {    //we want to resize a node
         if len(*fNodeName) > 0 {
             if *fSize > 0 {
@@ -142,32 +167,56 @@ func main() {
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
         }
+    
     } else if *fDeleteSub { //we want to delete a sub domain
         if len(*fSubDomain) > 0 {
-            if len(*fDomain) > 0 {
-                err = do.DeleteDomainRecord(*fDomain, *fSubDomain)
+            if *fTP_CloudFlare {
+                err = cf.DeleteDomainRecord (*fSubDomain)
             } else {
-                err = fmt.Errorf("Domain name not set. use the -d option")
+                if len(*fDomain) > 0 {
+                    err = do.DeleteDomainRecord(*fDomain, *fSubDomain)
+                } else {
+                    err = fmt.Errorf("Domain name not set. use the -d option")
+                }
             }
         } else {
             err = fmt.Errorf("Subdomain not set.  use the -sd option")
         }
-    } else if len(*fIP) > 0 && *fNodeID > 0 {
-        fmt.Println("Setting floating ip to a node")
-        
-        existing := 0
-        existing, err = do.GetFloatingIP(*fIP)
-        if err == nil {
-            if existing != *fNodeID {    //they don't match. So let's update them
-                if *fVerbose { fmt.Println("Node not already assigned.  Updating...") }
-                err = do.AssignFloatingIP(*fIP, *fNodeID)
-            } else {
-                if *fVerbose { fmt.Println("Node already assigned.  No work to do") }
-            }
-        }
-    } else if len(*fIP) > 0 && len(*fDomainType) > 0 && len(*fSubDomain) > 0 && len(*fDomain) > 0 {
+    
+    } else if *fFloatingIP {    //we want to set a floating ip to a node
+        if len(*fIP) > 0 {
+            if *fNodeID > 0 {
+                fmt.Println("Setting floating ip to a node")
+                
+                existing := 0
+                existing, err = do.GetFloatingIP(*fIP)
+                if err == nil {
+                    if existing != *fNodeID {    //they don't match. So let's update them
+                        if *fVerbose { fmt.Println("Node not already assigned.  Updating...") }
+                        err = do.AssignFloatingIP(*fIP, *fNodeID)
+                    } else {
+                        if *fVerbose { fmt.Println("Node already assigned.  No work to do") }
+                    }
+                }
+            } else { err = fmt.Errorf("Node id not set.  use the -node option") }
+        } else { err = fmt.Errorf("Floating ip address not set.  use the -ip option") }
+    
+    } else if *fCreateSub { //create a sub domain
         fmt.Println("Setting domain record")
-        err = do.AssignDomainRecord (*fDomain, *fDomainType, *fSubDomain, *fIP)
+        if len(*fIP) > 0 && len(*fDomainType) > 0 && len(*fSubDomain) > 0 {
+            if *fTP_CloudFlare {
+                err = cf.AssignDomainRecord (*fDomainType, *fSubDomain, *fIP)
+            } else {
+                if len(*fDomain) > 0 {
+                    err = do.AssignDomainRecord (*fDomain, *fDomainType, *fSubDomain, *fIP)
+                } else {
+                    err = fmt.Errorf("Missing command line options for creating a sub-domain\n-d")
+                }
+            }
+        } else {
+            err = fmt.Errorf("Missing command line options for creating a sub-domain\n-ip, && -sd")
+        }
+    
     } else {
         fmt.Println("Invalid flags")
         os.Exit(1)
