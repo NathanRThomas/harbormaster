@@ -15,7 +15,7 @@ import (
     "github.com/NathanRThomas/harbormaster/libraries"
 )
 
-const VER		= "0.3"
+const VER		= "0.4"
 
 type config_t struct {
     DO      libraries.DO_config_t  `json:"digital_ocean"`
@@ -93,6 +93,7 @@ func main() {
     fNodeName   := flag.String("n", "", "Name of the target node")
     fRegion     := flag.String("region", "nyc3", "Slug of the region for the node")
     fSize       := flag.Int("size", 0, "Size of the node in gb")
+    fCPUSize    := flag.Int("cpu", 0, "Size of node in cpu's, for high cpu droplets")
     fImage      := flag.String("image", "ubuntu-16-04-x64", "OS image to use for the node")
     fSSHKey     := flag.String("sshKey", "", "SSH Key to use when creating a node")
     
@@ -137,14 +138,25 @@ func main() {
     cf := libraries.CF_c {SuperVerbose: *fSuperV, Verbose: *fVerbose, Config: config.CF}   //clourd flare library
     fileOutput := libraries.FileOutput_t{}
     
+    //figure out our size, if set
+    targetSize := ""
+    if *fSize > 0 && *fCPUSize > 0 {
+        fmt.Println("Please use either the -size or -cpu flags.\n-size is for a normal droplet based on ram size\n-cpu is for the higher cpu droplets and is based on cpu count")
+        os.Exit(4)
+    } else if *fSize > 0 {
+        targetSize = fmt.Sprintf("%dgb", *fSize)
+    } else if *fCPUSize > 0 {
+        targetSize = fmt.Sprintf("c-%d", *fCPUSize)
+    }
+    
 //----- Figure out what we're done --------------------------------------------------------------------------------------------------------------//
     if *fCreate {   //we're creating a new node
         if len(*fNodeName) > 0 {
-            if *fSize > 0 {
-                fmt.Println("Creating node: " + *fNodeName)
-                err = do.CreateNode(*fNodeName, *fRegion, *fTag, *fSize, *fImage, *fSSHKey, &fileOutput)
+            if len(targetSize) > 0 {
+                fmt.Printf("Creating node: %s with the size %s\n", *fNodeName, targetSize)
+                err = do.CreateNode(*fNodeName, *fRegion, *fTag, targetSize, *fImage, *fSSHKey, &fileOutput)
             } else {
-                err = fmt.Errorf("Size of node not set.  use the -size option")
+                err = fmt.Errorf("Size of node not set.  use the -size or -cpu option")
             }
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")
@@ -159,10 +171,10 @@ func main() {
     
     } else if *fResize {    //we want to resize a node
         if len(*fNodeName) > 0 {
-            if *fSize > 0 {
-                err = do.ResizeNode(*fNodeName, *fSize)
+            if len(targetSize) > 0 {
+                err = do.ResizeNode(*fNodeName, targetSize)
             } else {
-                err = fmt.Errorf("Size to resize to not set.  use the -size option")
+                err = fmt.Errorf("Size to resize to not set.  use the -size or -cpu option")
             }
         } else {
             err = fmt.Errorf("Node name not set.  use the -n option")

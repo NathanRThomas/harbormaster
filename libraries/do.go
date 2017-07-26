@@ -365,7 +365,7 @@ func (do DO_c) DeleteDomainRecord (domain, subDomain string) error {
 
 /*! \brief Creates a new node, if it doesn't already exist
  */
-func (do DO_c) CreateNode (name, region, tag string, size int, image, sshKey string, fileOutput *FileOutput_t) (err error) {
+func (do DO_c) CreateNode (name, region, tag, size, image, sshKey string, fileOutput *FileOutput_t) (err error) {
     //see if the droplet already exists
     droplet, err := do.getDropletFromName (name)
     
@@ -379,7 +379,7 @@ func (do DO_c) CreateNode (name, region, tag string, size int, image, sshKey str
                 Image   string  `json:"image"`
                 Keys    []string    `json:"ssh_keys,omitempty"`
                 Tags    []string    `json:"tags,omitempty"`
-            }{Name: name, Region: region, Size: fmt.Sprintf("%dgb", size), Image: image}
+            }{Name: name, Region: region, Size: size, Image: image}
             
             //see if we have any sshkeys for this
             if len(sshKey) > 0 { node.Keys = append(node.Keys, sshKey) }
@@ -429,41 +429,37 @@ func (do DO_c) DeleteNode (name string) (err error) {
 /*! \brief Resizes the node to the new target size
  *  This needs to power the node off first, then resize it, then start it
  */
-func (do DO_c) ResizeNode (name string, size int) (err error) {
+func (do DO_c) ResizeNode (name, size string) (err error) {
     droplet, err := do.getDropletFromName (name)    //get this droplet
     
     if err == nil {
         if droplet != nil {    //we have a droplet we want to remove
-            if int(droplet.Memory / 1024) != size {
-                fmt.Println("Resizing node: " + name)
-                err = do.shutdownNode(droplet)  //first step is to shut it down
+            fmt.Println("Resizing node: " + name)
+            err = do.shutdownNode(droplet)  //first step is to shut it down
+            if err == nil {
+                //now we issue the resize
+                simple := do_t{Type: "resize", Size: size}
+                jStr, _ := json.Marshal(simple)
+                if do.Verbose { fmt.Println("Resizing node '%s' to %s", name, size) }
+                _, err = do.request(fmt.Sprintf("droplets/%d/actions", droplet.ID), jStr)   //issue the resize command
+                
+                //this can take a while, so we wait a minute, but we want the node to start as soon as possible
                 if err == nil {
-                    //now we issue the resize
-                    simple := do_t{Type: "resize", Size: fmt.Sprintf("%dgb", size)}
-                    jStr, _ := json.Marshal(simple)
-                    if do.Verbose { fmt.Println("Resizing node '%s' to %dgb", name, size) }
-                    _, err = do.request(fmt.Sprintf("droplets/%d/actions", droplet.ID), jStr)   //issue the resize command
-                    
-                    //this can take a while, so we wait a minute, but we want the node to start as soon as possible
-                    if err == nil {
-                        locked := true
-                        fmt.Println("Waiting for node to finish resize")
-                        for locked {
-                            time.Sleep(time.Second * 20)    //wait a little while, this takes some time
-                            dStatus := do.getDropletFromID(droplet.ID)
-                            
-                            if !dStatus.Locked {    //we've been waiting for this moment
-                                do.startNode(droplet)   //start this node
-                                locked = false
-                            }
-                        }
+                    locked := true
+                    fmt.Println("Waiting for node to finish resize")
+                    for locked {
+                        time.Sleep(time.Second * 20)    //wait a little while, this takes some time
+                        dStatus := do.getDropletFromID(droplet.ID)
                         
-                        //now we just wait for the node to be active
-                        do.waitForNodeStatus(droplet.ID, "active", 10)
+                        if !dStatus.Locked {    //we've been waiting for this moment
+                            do.startNode(droplet)   //start this node
+                            locked = false
+                        }
                     }
+                    
+                    //now we just wait for the node to be active
+                    do.waitForNodeStatus(droplet.ID, "active", 10)
                 }
-            } else {
-                if do.Verbose { fmt.Println("Droplet already the target size.  Skipping") }
             }
         } else {
             if do.Verbose { fmt.Println("Droplet does not exist, please check the name") }
